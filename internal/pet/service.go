@@ -285,10 +285,18 @@ func (s *Service) ChangePassword(ctx context.Context, principal Principal, oldPa
 		return err
 	}
 	now := formatStoredTime(s.now())
-	if err := s.store.changePasswordOnly(ctx, principal.UserID, string(newHash), now); err != nil {
-		return fmt.Errorf("change password: %w", err)
+	tx, err := s.store.db.BeginTx(ctx, &sql.TxOptions{})
+	if err != nil {
+		return err
 	}
-	return nil
+	defer func() { _ = tx.Rollback() }()
+	if _, err := tx.ExecContext(ctx, `UPDATE pet_users SET password_hash=?,update_time=? WHERE user_id=?`, string(newHash), now, principal.UserID); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE pet_sessions SET revoked_at=? WHERE user_id=? AND revoked_at IS NULL`, now, principal.UserID); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 func (s *Service) ResetPassword(ctx context.Context, principal Principal, userID int64, password string) error {
